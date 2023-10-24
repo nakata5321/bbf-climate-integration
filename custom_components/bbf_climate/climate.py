@@ -3,7 +3,7 @@ import logging
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.components.climate import (
-    ClimateEntity,
+    ClimateEntity
 )
 from homeassistant.components.climate.const import (
     FAN_ON,
@@ -26,6 +26,7 @@ from homeassistant.components.mqtt.client import publish as mqtt_publish
 
 _LOGGER = logging.getLogger(__name__)
 
+DOMAIN = "bbf_climate"
 DEFAULT_NAME = "BBF Climate"
 # CONF_CURRENT_TEMP_TEMPLATE = "current_temperature_template"
 CONF_MQTT_SET_TOPIC = "set_topic"
@@ -53,6 +54,7 @@ async def async_setup_platform(
 class BbfClimate(ClimateEntity):
 
     def __init__(self, hass: HomeAssistant, config: ConfigType):
+        super().__init__()
         self._current_humidity = None
         self._current_temp = None
         self.hass = hass
