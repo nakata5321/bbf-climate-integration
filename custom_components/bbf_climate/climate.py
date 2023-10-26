@@ -6,18 +6,13 @@ from homeassistant.components.climate import (
     ClimateEntity
 )
 from homeassistant.components.climate.const import (
-    FAN_ON,
-    FAN_OFF,
-    FAN_LOW,
-    FAN_MEDIUM,
-    FAN_HIGH,
     HVACMode,
-    HVACAction
+    ClimateEntityFeature
 )
-
 
 from homeassistant.const import (
     CONF_NAME,
+    ATTR_TEMPERATURE
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
@@ -45,7 +40,6 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None) -> None:
-
     """Set up the BBF Climate."""
     async_add_entities([BbfClimate(hass, config)])
 
@@ -54,63 +48,31 @@ class BbfClimate(ClimateEntity):
 
     def __init__(self, hass: HomeAssistant, config: ConfigType):
         super().__init__()
-        self._current_humidity = None
-        self._current_temp = None
-        self.hass = hass
-
-        self._attr_fan_modes = [FAN_ON, FAN_OFF, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
-        self._attr_hvac_action = HVACAction.OFF
-
+        self._attr_has_entity_name = True
         self._attr_name = config[CONF_NAME]
-        self._attr_min_temp = 16
-        self._attr_max_temp = 33
-        self._attr_target_temperature_step = 0.5
 
-        self._current_fan_mode = FAN_LOW  # default optimistic state
-        self._current_operation = HVACMode.OFF  # default optimistic state
-        self._current_swing_mode = HVACMode.OFF  # default optimistic state
-        self._target_temp = DEFAULT_TEMP  # default optimistic state
-        self._attr_target_temperature_high = None
-        self._attr_target_temperature_low = None
+        self.hass = hass
+        self._attr_temperature_unit = hass.config.units.temperature_unit
+        self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
 
-        self._available = True
-        self._unit_of_measurement = hass.config.units.temperature_unit
-        self._attr_supported_features = 0
-
+        self._attr_hvac_mode = HVACMode.OFF
         self._attr_hvac_modes = [
                 HVACMode.OFF,
                 HVACMode.COOL,
                 HVACMode.HEAT,
             ]
 
+        self._attr_target_temperature = 21
+
     def set_hvac_mode(self, hvac_mode):
         """Set new target hvac mode."""
         mqtt_publish(hass=self.hass, topic=CONF_MQTT_SET_TOPIC, payload="set new hvac mode")
 
-    def set_preset_mode(self, preset_mode):
-        """Set new target preset mode."""
-        pass
-
-    def set_fan_mode(self, fan_mode):
-        """Set new target fan mode."""
-        pass
-
-    def set_humidity(self, humidity):
-        """Set new target humidity."""
-        pass
-
-    def set_swing_mode(self, swing_mode):
-        """Set new target swing operation."""
-        pass
-
     def set_temperature(self, **kwargs):
         """Set new target temperature."""
-        mqtt_publish(hass=self.hass, topic=CONF_MQTT_SET_TOPIC, payload=f"set new temperature mode - {self._target_temp}")
 
-    def turn_aux_heat_on(self) -> None:
-        """Turn auxiliary heater on."""
-        pass
+        self._attr_target_temperature = kwargs.get(ATTR_TEMPERATURE)
+        self.async_write_ha_state()
 
-    def turn_aux_heat_off(self) -> None:
-        """Turn auxiliary heater off."""
-        pass
+        mqtt_publish(hass=self.hass, topic=CONF_MQTT_SET_TOPIC, payload=f"set new temperature mode - {self.target_temperature}")
+
