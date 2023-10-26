@@ -2,7 +2,7 @@
   "domain": "bbf_climate",
   "name": "BBF climate",
   "codeowners": ["@nakata5321"],
-  "dependencies": [""],
+  "dependencies": [],
   "documentation": "https://www.example.com",
   "integration_type": "entity",
   "iot_class": "local_polling",

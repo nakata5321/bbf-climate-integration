@@ -44,10 +44,9 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
 )
 
 
-async def async_setup_platform(
-        hass: HomeAssistant, config: ConfigType, async_add_entities) -> None:
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None) -> None:
 
-    """Set up the Template Climate."""
+    """Set up the BBF Climate."""
     async_add_entities([BbfClimate(hass, config)])
 
 
