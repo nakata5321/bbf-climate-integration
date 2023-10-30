@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
 from homeassistant.components.mqtt.client import publish as mqtt_publish
+from homeassistant.components.mqtt.client import subscribe as mqtt_subscribe
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,10 +51,14 @@ class BbfClimate(ClimateEntity):
         super().__init__()
         self._attr_has_entity_name = True
         self._attr_name = config[CONF_NAME]
+        self.set_topic = config[CONF_MQTT_SET_TOPIC]
+        self.get_topic = config[CONF_MQTT_GET_TOPIC]
 
         self.hass = hass
         self._attr_temperature_unit = hass.config.units.temperature_unit
         self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
+        self._attr_min_temp = 16
+        self._attr_max_temp = 26
 
         self._attr_hvac_mode = HVACMode.OFF
         self._attr_hvac_modes = [
@@ -64,9 +69,14 @@ class BbfClimate(ClimateEntity):
 
         self._attr_target_temperature = 21
 
+        self.subscriber = mqtt_subscribe(self.hass, self.set_topic, self.update)
+
     def set_hvac_mode(self, hvac_mode):
         """Set new target hvac mode."""
-        mqtt_publish(hass=self.hass, topic=CONF_MQTT_SET_TOPIC, payload="set new hvac mode")
+        self._attr_hvac_mode = hvac_mode
+        self.async_write_ha_state()
+
+        mqtt_publish(hass=self.hass, topic=self.set_topic, payload=f"set new hvac mode - {self.hvac_mode}")
 
     def set_temperature(self, **kwargs):
         """Set new target temperature."""
@@ -74,5 +84,9 @@ class BbfClimate(ClimateEntity):
         self._attr_target_temperature = kwargs.get(ATTR_TEMPERATURE)
         self.async_write_ha_state()
 
-        mqtt_publish(hass=self.hass, topic=CONF_MQTT_SET_TOPIC, payload=f"set new temperature mode - {self.target_temperature}")
+        mqtt_publish(hass=self.hass, topic=self.get_topic, payload=f"set new temperature mode - {self.target_temperature}")
+
+    def update(self, topic, payload, qos) -> None:
+        _LOGGER.info(f"i've get value {payload}")
+
 
