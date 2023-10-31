@@ -1,26 +1,17 @@
-import asyncio
 import logging
 import time
 from random import randint
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant.components.climate import (
-    ClimateEntity
-)
-from homeassistant.components.climate.const import (
-    HVACMode,
-    ClimateEntityFeature
-)
+from homeassistant.components.climate import ClimateEntity
+from homeassistant.components.climate.const import HVACMode, ClimateEntityFeature
 
-from homeassistant.const import (
-    CONF_NAME,
-    ATTR_TEMPERATURE
-)
+from homeassistant.const import CONF_NAME, ATTR_TEMPERATURE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
-from .utils import to_thread
+from .utils import convert_temp_from_dex
 
 from paho.mqtt import client as mqtt_client
 from homeassistant.components.mqtt.const import DATA_MQTT
@@ -35,7 +26,8 @@ MAX_RECONNECT_DELAY = 60
 
 DOMAIN = "bbf_climate"
 DEFAULT_NAME = "BBF Climate"
-# CONF_CURRENT_TEMP_TEMPLATE = "current_temperature_template"
+
+CONF_TEMPERATURE_ENTITY_ID = "temperature_sensor"
 CONF_MQTT_SET_TOPIC = "set_topic"
 CONF_MQTT_GET_TOPIC = "get_topic"
 
@@ -45,6 +37,7 @@ DEFAULT_PRECISION = 1.0
 PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
     {
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+        vol.Required(CONF_TEMPERATURE_ENTITY_ID): cv.string,
         vol.Required(CONF_MQTT_SET_TOPIC): cv.string,
         vol.Required(CONF_MQTT_GET_TOPIC): cv.string,
     }
@@ -57,12 +50,14 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
 
 class BbfClimate(ClimateEntity):
-
     def __init__(self, hass: HomeAssistant, config: ConfigType):
         # Set Climate attributes
         super().__init__()
+        self.hass = hass
+
         self._attr_has_entity_name = True
         self._attr_name = config[CONF_NAME]
+        self.temp_sensor = config[CONF_TEMPERATURE_ENTITY_ID]
         self.set_topic = config[CONF_MQTT_SET_TOPIC]
         self.get_topic = config[CONF_MQTT_GET_TOPIC]
         self._attr_temperature_unit = hass.config.units.temperature_unit
@@ -71,25 +66,36 @@ class BbfClimate(ClimateEntity):
         self._attr_max_temp = 26
         self._attr_hvac_mode = HVACMode.OFF
         self._attr_hvac_modes = [
-                HVACMode.OFF,
-                HVACMode.COOL,
-                HVACMode.HEAT,
-            ]
+            HVACMode.OFF,
+            HVACMode.COOL,
+            HVACMode.HEAT,
+        ]
         self._attr_target_temperature = 21
-
-        self.hass = hass
+        self._attr_current_temperature = 21
 
         # get information about MQTT client
         self.mqtt_data = self.hass.data[DATA_MQTT].client.conf
         self.mqtt_broker = self.mqtt_data["broker"]
         self.mqtt_port = self.mqtt_data["port"]
-        self.mqtt_client_id = f'bbf-climate-{randint(0, 1000)}'
+        self.mqtt_client_id = f"bbf-climate-{randint(0, 1000)}"
         self.mqtt_username = self.mqtt_data["username"]
         self.mqtt_password = self.mqtt_data["password"]
 
         # Create mqtt client
         self.mqtt_client = self.connect_mqtt()
+        self.mqtt_client.on_message = self.on_message
+        self.mqtt_client.subscribe(self.get_topic)
         self.mqtt_client.loop_start()
+
+        # callback values
+        self.actual_temp_raw = ""
+        self.critical_temp_raw = hex(50)
+
+    def async_update(self):
+        temp = self.hass.states.get(self.temp_sensor).attributes["temperature"]
+        _LOGGER.info(self.hass.states.get(self.temp_sensor).attributes)
+        self._attr_current_temperature = temp
+        self.async_write_ha_state()
 
     def on_disconnect(self, client, userdata, rc):
         _LOGGER.warning("Disconnected with result code: %s", rc)
@@ -125,7 +131,6 @@ class BbfClimate(ClimateEntity):
         client.connect(self.mqtt_broker, self.mqtt_port)
         return client
 
-    @to_thread
     def mqtt_publish(self, client: mqtt_client.Client, topic: str, msg: str) -> None:
         msg_count = 1
         while True:
@@ -143,16 +148,53 @@ class BbfClimate(ClimateEntity):
                 _LOGGER.error(f"unable to sent message {msg} to topic {topic}")
                 break
 
+    def on_message(self, client: mqtt_client.Client, userdata, msg):
+        _LOGGER.info(f"Received `{msg.payload.decode()}` from `{msg.topic}` topic")
+        message = msg.payload.decode()
 
+        # TODO check with var are needed
+        actual_temp = convert_temp_from_dex(message, 0, 4)
+        required_therm_term = convert_temp_from_dex(message, 8, 12)
+        required_ac_term = convert_temp_from_dex(message, 20, 24)
+        living_correction = convert_temp_from_dex(message, 24, 28)
 
+        self.actual_temp_raw = message.split("\n")[0:4]
+        self.actual_temp_raw = "\n".join(self.actual_temp_raw)
+
+        value_on_off = message.split("\n")[30:31]
+        value_on_off = bin(int(value_on_off, 16))[2:].zfill(4)
+        if value_on_off[3] == "0":
+            self._attr_hvac_mode = HVACMode.OFF
+        else:
+            if value_on_off[1] == "1":
+                self._attr_hvac_mode = HVACMode.HEAT
+            if value_on_off[0] == "1":
+                self._attr_hvac_mode = HVACMode.COOL
+
+        if required_ac_term > 26:
+            required_ac_term = 26
+        if required_therm_term > 26:
+            required_therm_term = 26
+
+        self._attr_target_temperature = required_ac_term
+
+        if self.hvac_mode == HVACMode.HEAT:
+            self._attr_target_temperature = required_therm_term
+
+        self.async_write_ha_state()
 
     # Climate set methods
     def set_hvac_mode(self, hvac_mode):
         """Set new target hvac mode."""
         self._attr_hvac_mode = hvac_mode
         self.async_write_ha_state()
+        message = ""
 
-        asyncio.ensure_future(self.mqtt_publish(client=self.mqtt_client, topic=self.set_topic, msg=f"set new hvac mode - {self.hvac_mode}"))
+        self.mqtt_publish(
+            client=self.mqtt_client,
+            topic=self.set_topic,
+            msg=f"set new hvac mode - {self.hvac_mode}",
+        )
 
     def set_temperature(self, **kwargs):
         """Set new target temperature."""
@@ -160,9 +202,8 @@ class BbfClimate(ClimateEntity):
         self._attr_target_temperature = kwargs.get(ATTR_TEMPERATURE)
         self.async_write_ha_state()
 
-        asyncio.ensure_future(self.mqtt_publish(client=self.mqtt_client, topic=self.get_topic, msg=f"set new temperature mode - {self.target_temperature}"))
-
-    def update(self, topic, payload, qos) -> None:
-        _LOGGER.info(f"i've get value {payload}")
-
-
+        self.mqtt_publish(
+            client=self.mqtt_client,
+            topic=self.get_topic,
+            msg=f"set new temperature mode - {self.target_temperature}",
+        )
