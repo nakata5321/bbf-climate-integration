@@ -1,22 +1,20 @@
-import logging
 import time
-from random import randint
-
-
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.event import async_track_state_change
+import logging
 import voluptuous as vol
-from homeassistant.components.climate import ClimateEntity
-from homeassistant.components.climate.const import HVACMode, ClimateEntityFeature
+from random import randint
+from paho.mqtt import client as mqtt_client
 
-from homeassistant.const import CONF_NAME, ATTR_TEMPERATURE, STATE_UNKNOWN, STATE_UNAVAILABLE
-from homeassistant.core import HomeAssistant, callback
+
 from homeassistant.helpers.typing import ConfigType
+import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.mqtt.const import DATA_MQTT
+from homeassistant.components.climate import ClimateEntity
+from homeassistant.helpers.event import async_track_state_change
+from homeassistant.components.climate.const import HVACMode, ClimateEntityFeature
+from homeassistant.const import CONF_NAME, ATTR_TEMPERATURE, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from .utils import convert_temp_from_hex, convert_temp_to_hex
-
-from paho.mqtt import client as mqtt_client
-from homeassistant.components.mqtt.const import DATA_MQTT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,9 +34,7 @@ CONF_MQTT_GET_TOPIC = "get_topic"
 DEFAULT_TEMP = 21
 DEFAULT_PRECISION = 1.0
 
-
 INELS_HVAC_MODES = {"off": "00", "heat": "01", "cool": "03"}
-
 
 PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
     {
@@ -96,7 +92,7 @@ class BbfClimate(ClimateEntity):
         # callback values
         self.critical_temp_raw = convert_temp_to_hex(50)
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
         _LOGGER.debug(f"async_added_to_hass {self} {self.name} {self.supported_features}")
@@ -104,20 +100,19 @@ class BbfClimate(ClimateEntity):
         if self._temperature_sensor:
             async_track_state_change(self.hass, self._temperature_sensor, self._async_temp_sensor_changed)
 
-    async def _async_temp_sensor_changed(self, entity_id, old_state, new_state):
+    async def _async_temp_sensor_changed(self, entity_id, old_state, new_state) -> None:
         """Handle temperature sensor changes."""
         if new_state is None:
             return
 
         self._async_update_temp(new_state)
         self.async_write_ha_state()
-        _LOGGER.info(f"_async_temp_sensor_changed")
 
         output_message = self.create_msg()
         self.mqtt_publish(client=self.mqtt_client, topic=self.set_topic, msg=output_message)
 
     @callback
-    def _async_update_temp(self, state):
+    def _async_update_temp(self, state) -> None:
         """Update thermostat with the latest state from temperature sensor."""
         try:
             if state.state != STATE_UNKNOWN and state.state != STATE_UNAVAILABLE:
@@ -126,6 +121,8 @@ class BbfClimate(ClimateEntity):
             _LOGGER.error("Unable to update from temperature sensor: %s", ex)
 
     def on_disconnect(self, client, userdata, rc):
+        """reconnect to mqtt broker in case of disconnected"""
+
         _LOGGER.warning("Disconnected with result code: %s", rc)
         reconnect_count, reconnect_delay = 0, FIRST_RECONNECT_DELAY
         while reconnect_count < MAX_RECONNECT_COUNT:
@@ -144,7 +141,12 @@ class BbfClimate(ClimateEntity):
             reconnect_count += 1
         _LOGGER.info("Reconnect failed after %s attempts. Exiting...", reconnect_count)
 
-    def connect_mqtt(self):
+    def connect_mqtt(self) -> mqtt_client.Client:
+        """
+        function to create mqtt client and connect to mqtt broker. mqtt broker data is taken from home assistant
+
+        """
+
         def on_connect(client, userdata, flags, rc):
             if rc == 0:
                 _LOGGER.info("Connected to MQTT Broker!")
@@ -160,6 +162,12 @@ class BbfClimate(ClimateEntity):
         return client
 
     def mqtt_publish(self, client: mqtt_client.Client, topic: str, msg: str) -> None:
+        """
+        publish msg to given topic. in case of fail retry 5 times
+        :param client: mqtt client
+        :param topic: topic name
+        :param msg: message
+        """
         msg_count = 1
         while True:
             result = client.publish(topic, msg)
@@ -176,7 +184,10 @@ class BbfClimate(ClimateEntity):
                 break
             time.sleep(1)
 
-    def on_message(self, client: mqtt_client.Client, userdata, msg):
+    def on_message(self, client: mqtt_client.Client, userdata, msg) -> None:
+        """
+        callback function. update target temperature and HVAC mode
+        """
         _LOGGER.info(f"Received `{msg.payload.decode()}` from `{msg.topic}` topic")
         message = msg.payload.decode()
 
@@ -206,6 +217,10 @@ class BbfClimate(ClimateEntity):
         self.async_write_ha_state()
 
     def create_msg(self) -> str:
+        """
+        create byte message to send to inels controller
+        :return: string with bytes
+        """
         # create output message
         message = ""
         actual_temp_raw = convert_temp_to_hex(self.current_temperature)
