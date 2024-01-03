@@ -4,7 +4,7 @@
   "codeowners": ["@nakata5321"],
   "dependencies": ["mqtt"],
   "documentation": "https://www.example.com",
-  "integration_type": "entity",
+  "integration_type": "hub",
   "iot_class": "local_polling",
   "requirements": ["paho-mqtt~=1.6"],
   "version": "0.1.0"
